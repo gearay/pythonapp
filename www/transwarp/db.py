@@ -1,5 +1,106 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+import time
+import uuid
+import threading
+import logging
+#Dict object
+
+class Dict(dict):
+	'''
+	define a Dict type can present dict with '.'
+	example here for doctest.
+
+	>>> d1 = Dict() 
+	>>> d1['x'] = 100
+	>>> d1.x
+	100
+	>>> d1.y = 200
+	>>> d1['y']
+	200
+	>>> d2 = Dict(a='1',b='2',c='3')
+	>>> d2.c
+	'3'
+	>>> d2['empty']
+	Traceback (most recent call last):
+		...
+	KeyError: 'empty'
+	>>> d2.empty
+	Traceback (most recent call last):
+		...
+	KeyError: 'empty'
+	>>> d3= Dict(('a','b','c'),(1,2,3))
+	>>> d3.a
+	1
+	>>> d3.b
+	2
+	>>> d3.c
+	3
+
+	'''
+	def __init__(self, name=(), value=(), **kw):
+		super(Dict, self).__init__(**kw)
+		for k, v in zip(name,value):
+			self[k] = v
+			
+	def __getattr__(self,key):
+			return self[key]
+
+	def __setattr__(self, key, value):
+		self[key] = value
+		pass
+
+def next_id( t = None):
+	"""docstring for next_id
+	genurate uuid with 50  char
+	default as using time.time(), unless the arg is provided
+
+	"""
+	
+	if t is None:
+		t = time.time()
+		return '%015d%s000'%(int(t*1000), uuid.uuid4().hex)
+		
+def _profiling(start, sql=''):
+	'''log the time for sql function
+	>>> import time, logging
+	>>> _profiling(time.time(),'abc')
+	'''
+	t = time.time() - start
+	if t > 0.1:
+		logging.warning('[PROFILING] [DB] %s: %s'%(t,sql))
+		# print '[PROFILING] [DB] %s: %s'%(t,sql)
+	else:
+		logging.info('[PROFILING] [DB] %s: %s'%(t,sql))
+		# print 'info'+'[PROFILING] [DB] %s: %s'%(t,sql)
+	pass
+
+class _LasyConnection(object):
+	"""docstring for _LasyConnection
+	Creating DB connection, cursor, commit, cleanup and rollback
+	"""
+	def __init__(self):
+		self.connection = None
+
+	def cursor(self):
+		if self.connection is None:
+			connection = engine.connect() #engine need to be defined in the body: engine = mysql.connector
+			logging.info('open connection<%s>...'%hex(id(connection)))
+			self.connection = connection
+		return self.connection.cursor()
+	
+	def commit(self):
+		self.connection.commit()
+
+	def rollback(self):
+		self.connection.rollback()
+
+	def cleanup(self):
+		if self.connection:
+			connection = self.connection
+			self.connection = None
+			logging.info('close connection <%s>'%hex(id(connection)))
+			connection.close()
 
 class _Engine(object):
 	"""
@@ -9,6 +110,8 @@ class _Engine(object):
 		self.connect = connect
 	def connect(self):
 		return self._connect()
+
+
 
 engine = None
 
@@ -93,3 +196,7 @@ class _TransactionCtx(object):
 		global _db_ctx
 		_db_ctx.connection.rollback()
 		
+
+if __name__ == '__main__':
+	import doctest
+	doctest.testmod()
