@@ -1,17 +1,19 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-import time
-import uuid
-import threading
-import logging
-import functools
 
+__author__ = 'Michael Liao'
+
+'''
+Database operation module.
+'''
+
+import time, uuid, functools, threading, logging
+
+# Dict object:
 
 class Dict(dict):
-
     '''
-    define a Dict type can present dict with '.'
-    example here for doctest
+    Simple dict but support access as x.y style.
 
     >>> d1 = Dict()
     >>> d1['x'] = 100
@@ -20,81 +22,72 @@ class Dict(dict):
     >>> d1.y = 200
     >>> d1['y']
     200
-    >>> d2 = Dict(a='1',b='2',c='3')
+    >>> d2 = Dict(a=1, b=2, c='3')
     >>> d2.c
     '3'
     >>> d2['empty']
     Traceback (most recent call last):
-            ...
+        ...
     KeyError: 'empty'
     >>> d2.empty
     Traceback (most recent call last):
-                ...
-    KeyError: 'empty'
-    >>> d3= Dict(('a','b','c'),(1,2,3))
+        ...
+    AttributeError: 'Dict' object has no attribute 'empty'
+    >>> d3 = Dict(('a', 'b', 'c'), (1, 2, 3))
     >>> d3.a
     1
     >>> d3.b
     2
     >>> d3.c
     3
-
     '''
-
-    def __init__(self, name=(), value=(), **kw):
+    def __init__(self, names=(), values=(), **kw):
         super(Dict, self).__init__(**kw)
-        for k, v in zip(name, value):
+        for k, v in zip(names, values):
             self[k] = v
 
     def __getattr__(self, key):
-        return self[key]
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(r"'Dict' object has no attribute '%s'" % key)
 
     def __setattr__(self, key, value):
         self[key] = value
-        pass
-
 
 def next_id(t=None):
-    """docstring for next_id
-    genurate uuid with 50  char
-    default as using time.time(), unless the arg is provided
+    '''
+    Return next id as 50-char string.
 
-    """
-
+    Args:
+        t: unix timestamp, default to None and using time.time().
+    '''
     if t is None:
         t = time.time()
-        return '%015d%s000' % (int(t * 1000), uuid.uuid4().hex)
-
+    return '%015d%s000' % (int(t * 1000), uuid.uuid4().hex)
 
 def _profiling(start, sql=''):
-    '''log the time for sql function
-    >>> import time, logging
-    >>> _profiling(time.time(),'abc')
-    '''
     t = time.time() - start
     if t > 0.1:
         logging.warning('[PROFILING] [DB] %s: %s' % (t, sql))
-        # print '[PROFILING] [DB] %s: %s'%(t,sql)
     else:
         logging.info('[PROFILING] [DB] %s: %s' % (t, sql))
-        # print 'info'+'[PROFILING] [DB] %s: %s'%(t,sql)
+
+class DBError(Exception):
     pass
 
+class MultiColumnsError(DBError):
+    pass
 
 class _LasyConnection(object):
-
-    """docstring for _LasyConnection
-    Creating DB connection, cursor, commit, cleanup and rollback
-    """
 
     def __init__(self):
         self.connection = None
 
     def cursor(self):
         if self.connection is None:
-        # engine need to be defined in the body: engine = mysql.connector
             connection = engine.connect()
-            logging.info('open connection<%s>...' % hex(id(connection)))
+            logging.info('open connection <%s>...' % hex(id(connection)))
             self.connection = connection
         return self.connection.cursor()
 
@@ -108,46 +101,19 @@ class _LasyConnection(object):
         if self.connection:
             connection = self.connection
             self.connection = None
-            logging.info('close connection <%s>' % hex(id(connection)))
+            logging.info('close connection <%s>...' % hex(id(connection)))
             connection.close()
 
-
-class _Engine(object):
-
-    """
-    Databass engine class
-    """
-
-    def __init__(self, connect):
-        # super(_Engine, self).__init__()
-        self.connect = connect
-
-    def connect(self):
-        return self._connect()
-
-
-engine = None
-
-
 class _DbCtx(threading.local):
-
-    """docstring for _DbCtx
-    持有数据库连接的上下文对象
-    _DbCtx 是threading.local 对象
-    所以它持有的数据库连接对于每个线程看到的都是不一样的，
-    任何线程都无法访问到其他线程持有的数据库连接
-    >>> db= _DbCtx()
-    >>> db.is_int()
-    True
-    """
-
+    '''
+    Thread local object that holds connection info.
+    '''
     def __init__(self):
-        # super(_DbCtx, self).__init__()
         self.connection = None
         self.transactions = 0
 
-    def is_int(self):
-        return not self.connection
+    def is_init(self):
+        return not self.connection is None
 
     def init(self):
         logging.info('open lazy connection...')
@@ -158,33 +124,55 @@ class _DbCtx(threading.local):
         self.connection.cleanup()
         self.connection = None
 
-
     def cursor(self):
+        '''
+        Return cursor
+        '''
         return self.connection.cursor()
 
+# thread-local db context:
 _db_ctx = _DbCtx()
 
-def create_engine(user, password, database, host = '120.0.0.1', port = 3306, **kw):
-	import mysql.connector
-	global engine
-	if engine is not None:
-		raise DBError('Engine is already initialized.')
-	prams  = Dict(user=user, password=password, database=database, host=host, port=port)
-	defaults = Dict(use_unicode=True, Charset='utf8', collation='utf8_general_ci', autocommit=False)
-	for k,v in defaults.iteritems():
-		prams[k] = kw.pop(k,v)
-	prams['buffered']=True
-	prams.update(kw)
-	engine = _Engine(lambda: mysql.connector.connect(**prams))
-	logging.info('Init mysql engine <%s>' % hex(id(engine)))
+# global engine object:
+engine = None
 
+class _Engine(object):
+
+    def __init__(self, connect):
+        self._connect = connect
+
+    def connect(self):
+        return self._connect()
+
+def create_engine(user, password, database, host='127.0.0.1', port=3306, **kw):
+    import mysql.connector
+    global engine
+    if engine is not None:
+        raise DBError('Engine is already initialized.')
+    params = dict(user=user, password=password, database=database, host=host, port=port)
+    defaults = dict(use_unicode=True, charset='utf8', collation='utf8_general_ci', autocommit=False)
+    for k, v in defaults.iteritems():
+        params[k] = kw.pop(k, v)
+    params.update(kw)
+    params['buffered'] = True
+    engine = _Engine(lambda: mysql.connector.connect(**params))
+    # test connection...
+    logging.info('Init mysql engine <%s> ok.' % hex(id(engine)))
 
 class _ConnectionCtx(object):
+    '''
+    _ConnectionCtx object that can open and close connection context. _ConnectionCtx object can be nested and only the most 
+    outer connection has effect.
 
+    with connection():
+        pass
+        with connection():
+            pass
+    '''
     def __enter__(self):
         global _db_ctx
         self.should_cleanup = False
-        if _db_ctx.is_int():
+        if not _db_ctx.is_init():
             _db_ctx.init()
             self.should_cleanup = True
         return self
@@ -194,40 +182,55 @@ class _ConnectionCtx(object):
         if self.should_cleanup:
             _db_ctx.cleanup()
 
-
 def connection():
+    '''
+    Return _ConnectionCtx object that can be used by 'with' statement:
+
+    with connection():
+        pass
+    '''
     return _ConnectionCtx()
 
 def with_connection(func):
-	'''Decorator for reuse connection, f1,f2,f3 shared with one connection
-	@with_connection
-	def foo(*args, **kw):
-		f1()
-		f2()
-		f3()
-	'''
-	@functools.wraps(func)
-	def _wrapper(*args, **kw):
-		with _ConnectionCtx():
-			return func(*args, **kw)
-	return _wrapper
+    '''
+    Decorator for reuse connection.
+
+    @with_connection
+    def foo(*args, **kw):
+        f1()
+        f2()
+        f3()
+    '''
+    @functools.wraps(func)
+    def _wrapper(*args, **kw):
+        with _ConnectionCtx():
+            return func(*args, **kw)
+    return _wrapper
 
 class _TransactionCtx(object):
+    '''
+    _TransactionCtx object that can handle transactions.
+
+    with _TransactionCtx():
+        pass
+    '''
 
     def __enter__(self):
         global _db_ctx
         self.should_close_conn = False
-        if _db_ctx.is_int():
+        if not _db_ctx.is_init():
+            # needs open a connection first:
             _db_ctx.init()
             self.should_close_conn = True
         _db_ctx.transactions = _db_ctx.transactions + 1
+        logging.info('begin transaction...' if _db_ctx.transactions==1 else 'join current transaction...')
         return self
 
     def __exit__(self, exctype, excvalue, traceback):
         global _db_ctx
         _db_ctx.transactions = _db_ctx.transactions - 1
         try:
-            if _db_ctx.transactions == 0:
+            if _db_ctx.transactions==0:
                 if exctype is None:
                     self.commit()
                 else:
@@ -241,26 +244,28 @@ class _TransactionCtx(object):
         logging.info('commit transaction...')
         try:
             _db_ctx.connection.commit()
-            logging.info('commit ok')
+            logging.info('commit ok.')
         except:
-        	logging.warning('commit failed. try rollback')
-        	_db_ctx.connection.rollback()
-        	logging.info('rollback ok.')
-        	raise
+            logging.warning('commit failed. try rollback...')
+            _db_ctx.connection.rollback()
+            logging.warning('rollback ok.')
+            raise
 
     def rollback(self):
         global _db_ctx
-        logging.warning('rollback transaction')
+        logging.warning('rollback transaction...')
         _db_ctx.connection.rollback()
-        logging.info('rollback ok')
+        logging.info('rollback ok.')
 
 def transaction():
-	'''
+    '''
     Create a transaction object so can use with statement:
+
     with transaction():
         pass
+
     >>> def update_profile(id, name, rollback):
-    ...     u = dict(id=id, name=name, email='%s@test.org' %(name), passwd=name, last_modified=time.time())
+    ...     u = dict(id=id, name=name, email='%s@test.org' % name, passwd=name, last_modified=time.time())
     ...     insert('user', **u)
     ...     r = update('update user set passwd=? where id=?', name.upper(), id)
     ...     if rollback:
@@ -277,12 +282,12 @@ def transaction():
     >>> select('select * from user where id=?', 900302)
     []
     '''
+    return _TransactionCtx()
 
-	return _TransactionCtx()
-
-def with_Transaction(func):
+def with_transaction(func):
     '''
     A decorator that makes function around transaction.
+
     >>> @with_transaction
     ... def update_profile(id, name, rollback):
     ...     u = dict(id=id, name=name, email='%s@test.org' % name, passwd=name, last_modified=time.time())
@@ -302,32 +307,32 @@ def with_Transaction(func):
     '''
     @functools.wraps(func)
     def _wrapper(*args, **kw):
-    	_start = time.time()
-    	with _TransactionCtx:
-    		return func(*args, **kw)
-		_profiling(_start)
-	return _wrapper
+        _start = time.time()
+        with _TransactionCtx():
+            return func(*args, **kw)
+        _profiling(_start)
+    return _wrapper
 
-def _select(sql, first,  *args):
-	'execute select SQL and return unique result or list result'
-	global _db_ctx
-	cursor = None
-	sql = sql.replace('?', '%s')
-	logging.info('SQL: %s, ARGS: %s'%(sql, args))
-	try:
-		cursor = _db_ctx.connection.cursor()
-		cursor.execute(sql, args)
-		if cursor.description:
-			names = [x[0] for x in cursor.description]
-		if first:
-			values = cursor.fetchone()
-			if not values:
-				return None
-			return Dict(names, values)
-		return [Dict(names, x) for x in cursor.fetchall()]
-	finally:
-		if cursor:
-			cursor.close()
+def _select(sql, first, *args):
+    ' execute select SQL and return unique result or list results.'
+    global _db_ctx
+    cursor = None
+    sql = sql.replace('?', '%s')
+    logging.info('SQL: %s, ARGS: %s' % (sql, args))
+    try:
+        cursor = _db_ctx.connection.cursor()
+        cursor.execute(sql, args)
+        if cursor.description:
+            names = [x[0] for x in cursor.description]
+        if first:
+            values = cursor.fetchone()
+            if not values:
+                return None
+            return Dict(names, values)
+        return [Dict(names, x) for x in cursor.fetchall()]
+    finally:
+        if cursor:
+            cursor.close()
 
 @with_connection
 def select_one(sql, *args):
@@ -335,6 +340,7 @@ def select_one(sql, *args):
     Execute select SQL and expected one result. 
     If no result found, return None.
     If multiple results found, the first one returned.
+
     >>> u1 = dict(id=100, name='Alice', email='alice@test.org', passwd='ABC-12345', last_modified=time.time())
     >>> u2 = dict(id=101, name='Sarah', email='sarah@test.org', passwd='ABC-12345', last_modified=time.time())
     >>> insert('user', **u1)
@@ -355,6 +361,7 @@ def select_one(sql, *args):
 def select_int(sql, *args):
     '''
     Execute select SQL and expected one int and only one int result. 
+
     >>> n = update('delete from user')
     >>> u1 = dict(id=96900, name='Ada', email='ada@test.org', passwd='A-12345', last_modified=time.time())
     >>> u2 = dict(id=96901, name='Adam', email='adam@test.org', passwd='A-12345', last_modified=time.time())
@@ -377,13 +384,14 @@ def select_int(sql, *args):
     '''
     d = _select(sql, True, *args)
     if len(d)!=1:
-    	raise MultiColumnsError('Expect only one column.')
-	return d.values()[0]
+        raise MultiColumnsError('Expect only one column.')
+    return d.values()[0]
 
 @with_connection
 def select(sql, *args):
     '''
     Execute select SQL and return list or empty list if no result.
+
     >>> u1 = dict(id=200, name='Wall.E', email='wall.e@test.org', passwd='back-to-earth', last_modified=time.time())
     >>> u2 = dict(id=201, name='Eva', email='eva@test.org', passwd='back-to-earth', last_modified=time.time())
     >>> insert('user', **u1)
@@ -406,25 +414,27 @@ def select(sql, *args):
 
 @with_connection
 def _update(sql, *args):
-	global _db_ctx
-	cursor = None
-	sql = sql.replace('?', '%s')
-	logging.info('SQL: %s, ARGS: %s' %(sql, args))
-	try:
-		cursor = _db_ctx.connection.cursor()
-		cursor.execute(sql, args)
-		r = cursor.rowcount
-		if _db_ctx.transactions == 0:
-			#when there is no transaction
-			logging.info('auto commit')
-			_db_ctx.connection.commit()
-		return r
-	finally:
-		if cursor:
-			cursor.close()
+    global _db_ctx
+    cursor = None
+    sql = sql.replace('?', '%s')
+    logging.info('SQL: %s, ARGS: %s' % (sql, args))
+    try:
+        cursor = _db_ctx.connection.cursor()
+        cursor.execute(sql, args)
+        r = cursor.rowcount
+        if _db_ctx.transactions==0:
+            # no transaction enviroment:
+            logging.info('auto commit')
+            _db_ctx.connection.commit()
+        return r
+    finally:
+        if cursor:
+            cursor.close()
+
 def insert(table, **kw):
     '''
     Execute insert SQL.
+
     >>> u1 = dict(id=2000, name='Bob', email='bob@test.org', passwd='bobobob', last_modified=time.time())
     >>> insert('user', **u1)
     1
@@ -443,6 +453,7 @@ def insert(table, **kw):
 def update(sql, *args):
     r'''
     Execute update SQL.
+
     >>> u1 = dict(id=1000, name='Michael', email='michael@test.org', passwd='123456', last_modified=time.time())
     >>> insert('user', **u1)
     1
@@ -461,11 +472,12 @@ def update(sql, *args):
     >>> update('update user set passwd=? where id=?', '***', '123\' or id=\'456')
     0
     '''
-
     return _update(sql, *args)
 
-
-if __name__ == '__main__':
+if __name__=='__main__':
+    logging.basicConfig(level=logging.DEBUG)
+    create_engine('www-data', 'www-data', 'test')
+    update('drop table if exists user')
+    update('create table user (id int primary key, name text, email text, passwd text, last_modified real)')
     import doctest
     doctest.testmod()
-    create_engine('cy', 'password', 'db', '123.0.0.1', 3214, collation = 'cgi_collation', buffered = False, autocommit = True)
