@@ -9,7 +9,7 @@ import time
 import logging
 import db
 
-class  Field(object):
+class Field(object):
 	"""docstring for  Field
 	Field is the base class for the Fieldtype in table object"""
 	
@@ -20,14 +20,14 @@ class  Field(object):
 		self.name = kw.get('name', None)
 		self._default = kw.get('default', None)
 		self.nullable = kw.get('nullable', False)
+		self.primary_key = kw.get('primary_key', False)
 		self.updatable = kw.get('updatable', True)
 		self.insertable = kw.get('insertable', True)
-		self.dll = kw.get('dll', '')
+		self.ddl = kw.get('ddl', '')
 		self._order = Field._count
 		Field._count = Field._count+1
-	
 
-    @property
+	@property
 	def default(self):
 		d = self._default
 		return d() if callable(d) else d
@@ -58,14 +58,14 @@ class IntegerField(Field):
 			kw['ddl']= 'bigint'
 		super(IntegerField, self).__init__(**kw)
 
-class FolatField(Field):
+class FloatField(Field):
 	"""Folat type Field, base on Field class"""
 	def __init__(self, **kw):
 		if not 'default' in kw:
 			kw['default'] = 0.0
 		if not 'ddl' in kw:
 			kw['ddl']= 'real'
-		super(FolatField, self).__init__(**kw)
+		super(FloatField, self).__init__(**kw)
 
 class BooleanField(Field):
 	"""Boolean type Field, base on Field class"""
@@ -91,19 +91,19 @@ class BlobField(Field):
 		if not 'default' in kw:
 			kw['default'] = ''
 		if not 'ddl' in kw:
-			kw['ddl']= 'Blob'
-		super(BooleanField, self).__init__(**kw)
+			kw['ddl']= 'blob'
+		super(BlobField, self).__init__(**kw)
 
 class VersionField(Field):
 	"""Version type Field, base on Field class"""
 	def __init__(self, name=None):
 		super(VersionField, self).__init__(name=name, default=0, ddl='bigint')
 
-_triggers + frozenset(['pre_insert', 'pre_update', 'pre_delete'])
+_triggers = frozenset(['pre_insert', 'pre_update', 'pre_delete'])
 
 def _gen_sql(table_name, mappings):
 	pk = None
-	sql = ['--generating SQL for %s:' % table_name, 'create table `%s` (' %table_name]
+	sql = ['-- generating SQL for %s:' % table_name, 'create table `%s` (' % table_name]
 	for f in sorted(mappings.values(), lambda x,y: cmp(x._order, y._order)): #sorted是一个高阶排序函数，对mappings.values()中的元素根据 后面的匿名函数来排序
 		if not hasattr(f, 'ddl'):
 			raise StandardError('no ddl in field "%s".' % f.name)
@@ -111,65 +111,70 @@ def _gen_sql(table_name, mappings):
 		nullable = f.nullable
 		if f.primary_key:
 			pk = f.name
-		sql.append(nullable and ' `%s` %s' %(f.name,ddl) or ' `%s` %s not null,' % (f.name,ddl))
-	sql.append(' primary key('%s')' %pk)
+		sql.append(nullable and '  `%s` %s,' % (f.name, ddl) or '  `%s` %s not null,' % (f.name, ddl))
+	sql.append('  primary key(`%s`)'%pk)
 	sql.append(');')
 	return '\n'.join(sql)
 
 class ModelMetaclass(type):
-	"""Metaclass for model object"""
-	def __new__(cls, name, bases, attrs):
-		#skip base model class
-		if name == 'Model':
-			return type.__new__(cls, name, bases, attrs)
+    '''
+    Metaclass for model objects.
+    '''
+    def __new__(cls, name, bases, attrs):
+        # skip base Model class:
+        if name=='Model':
+            return type.__new__(cls, name, bases, attrs)
 
-		#store all subclasses info:
-		if not hasattr(cls, 'subclasses'):
-			cls.subclasses = {}
-		if not name in cls.subclasses:
-			cls.subclasses[name] = name
-		else:
-			logging.warning('Redefine class: %s' % name)
+        # store all subclasses info:
+        if not hasattr(cls, 'subclasses'):
+            cls.subclasses = {}
+        if not name in cls.subclasses:
+            cls.subclasses[name] = name
+        else:
+            logging.warning('Redefine class: %s' % name)
 
-		logging.info('Scan ORMappings %s...' % name)
-		mappings = dict()
-		primary_key = None
-		for k, v in attrs.iteritems():
-			if isinstance(v, Field):
-				if not v.name:
-					v.name = k
-				logging.info('Found Mappings: %s => %s' %(k,v))
-				#check duplicate primary key:
-				if v.primary_key:
-					if primary_key:
-						raise TypeError('Cannot define more than 1 primary key in class: %s' % name)
-					if v.updatable:
-						logging.warning('NOTE: change primary key to non-updatable.')
-						v.updatable = False
-					if v.nullable:
-						logging.warning('Note: change primary key to non-nullable.')
-						v.nullable = False
-					primary_key = v	
-				Mappings[k] = v
-		#checking exist of primary key:
-		if not primary_key:
-			raise TypeError('primary key not defined in class : %s' % name)
-		for k in mappping.iterkeys():
-			attrs.pop(k)
-		if not '__table__' in attrs:
-			atts['__table__'] = name.lower()
-		attrs['__mappings__'] = mappings
-		attrs['__primary_key__'] = primary_key
-		attrs['__sql__'] = lambda self: _gen_sql(attrs['__table__'], mappings)
-		for trigger in _triggers:
-			if not trigger in attrs:
-				attrs[trigger] = None
-		return type.__new__(cls, name, bases, attrs)
+        logging.info('Scan ORMapping %s...' % name)
+        mappings = dict()
+        primary_key = None
+        for k, v in attrs.iteritems():
+            if isinstance(v, Field):
+                if not v.name:
+                    v.name = k
+                logging.info('Found mapping: %s => %s' % (k, v))
+                # check duplicate primary key:
+                if v.primary_key:
+                    if primary_key:
+                        raise TypeError('Cannot define more than 1 primary key in class: %s' % name)
+                    if v.updatable:
+                        logging.warning('NOTE: change primary key to non-updatable.')
+                        v.updatable = False
+                    if v.nullable:
+                        logging.warning('NOTE: change primary key to non-nullable.')
+                        v.nullable = False
+                    primary_key = v
+                mappings[k] = v
+        # check exist of primary key:
+        if not primary_key:
+            raise TypeError('Primary key not defined in class: %s' % name)
+        for k in mappings.iterkeys():
+            attrs.pop(k)
+        if not '__table__' in attrs:
+            attrs['__table__'] = name.lower()
+        attrs['__mappings__'] = mappings
+        attrs['__primary_key__'] = primary_key
+        attrs['__sql__'] = lambda self: _gen_sql(attrs['__table__'], mappings)
+        for trigger in _triggers:
+            if not trigger in attrs:
+                attrs[trigger] = None
+        return type.__new__(cls, name, bases, attrs)
 
 class Model(dict):
-	"""Base class for ORM.
+	'''
+	Base class for ORM. 
+	将以Model为类实例化的表中的column中的信息以字典形式保存，在update(), insert(),delete()等方法被调用时再与数据库进行操作
 
-	>>> class User(Model):
+
+    >>> class User(Model):
     ...     id = IntegerField(primary_key=True)
     ...     name = StringField()
     ...     email = StringField(updatable=False)
@@ -211,8 +216,7 @@ class Model(dict):
       `last_modified` real not null,
       primary key(`id`)
     );
-
-	"""
+    '''
 	__metaclass__ = ModelMetaclass
 
 	def __init__(self, **kw):
@@ -237,7 +241,9 @@ class Model(dict):
 
 	@classmethod
 	def find_first(cls, where, *args):
-		'''find by where clasuse and return on result. If multiple results found, only the first on returned. If no result found, return None.
+		'''
+		find by where clasuse and return on result. If multiple results found, 
+		only the first on returned. If no result found, return None.
 		'''
 		d =db.select_one('select * from %s %s' % (cls.__table__, where), *args)
 		return cls(**d) if d else None
@@ -247,7 +253,7 @@ class Model(dict):
 		'''
 		Find all and return list
 		'''
-		L= db.select('select * from `%s`' %cls.__talbe__)
+		L= db.select('select * from `%s`' %cls.__table__)
 		return [cls(**d) for d in L]
 
 	@classmethod
@@ -266,19 +272,19 @@ class Model(dict):
 		return db.select_int('select count(`%s`) from `%s`'% (cls.__primary_key__.name, cls.__table__,))
 
 	@classmethod
-	def count_by(cls):
+	def count_by(cls, where, *args):
 		'''
 		Find by 'select count(pk) from table where ...' and return int.
 		'''
-		return db.select_int('select count (`%s`) from `%s` %s' %(cls.__primary_key__.name, cls.__table__,wehre), *args)
+		return db.select_int('select count(`%s`) from `%s` %s' %(cls.__primary_key__.name, cls.__table__,wehre), *args)
 
 	def update(self):
-		self.pre_update and self.pre_update()
+		self.pre_update and self.pre_update()#表明“如果定义了pre_update 就执行这个函数”
 		L = []
 		args = []
 		for k, v in self.__mappings__.iteritems():
 			if v.updatable:
-				if hasatter(self, k):
+				if hasattr(self, k):
 					arg = getattr(self, k)
 				else:
 					arg = v.default
@@ -286,7 +292,32 @@ class Model(dict):
 				L.append('`%s`=?'%k)
 				args.append(arg)
 		pk = self.__primary_key__.name
-		args.append(getattr(self.pk))
-		db.update('update `%s` set %s where %s=?' %self.__table__,','.join(L),pk),*args)
-        return self
+		args.append(getattr(self, pk))
+		db.update('update `%s` set %s where %s=?' %(self.__table__,','.join(L),pk),*args)
+		return self
 
+	def delete(self):
+	    self.pre_delete and self.pre_delete()
+	    pk = self.__primary_key__.name
+	    args = (getattr(self,pk),)
+	    db.update('delete from `%s` where `%s`=?'%(self.__table__,pk), *args)
+	    return self
+
+	def insert(self):
+		self.pre_insert and self.pre_insert()
+		params = {}
+		for k,v in self.__mappings__.iteritems():
+			if v.insertable:
+				if not hasattr(self, k):
+					setattr(self,k,v.default)
+				params[v.name] = getattr(self,k)
+		db.insert('%s' % self.__table__, **params)
+		return self	
+
+if __name__=="__main__":
+    logging.basicConfig(level=logging.DEBUG)
+    db.create_engine('www-data', 'www-data', 'test')
+    db.update('drop table if exists user')
+    db.update('create table user (id int primary key, name text, email text, passwd text, last_modified real)')
+    import doctest
+    doctest.testmod()
